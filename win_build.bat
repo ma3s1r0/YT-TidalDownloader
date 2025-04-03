@@ -45,7 +45,6 @@ REM ✅ 빌드 실행
 echo [*] PyInstaller 빌드 시작...
 pyinstaller --noconfirm --windowed --onefile ^
   --name YT-TidalDownloader ^
-  --add-data ".env;." ^
   --add-data "!QTBASE_FAKE_QM!;PyQt5/Qt5/translations/qtbase.qm" ^
   tidal_downloader_gui.py
 

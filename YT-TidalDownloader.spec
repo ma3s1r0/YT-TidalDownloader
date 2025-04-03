@@ -5,7 +5,7 @@ a = Analysis(
     ['tidal_downloader_gui.py'],
     pathex=[],
     binaries=[],
-    datas=[('.env', '.'), ('C:\\Users\\lubel\\AppData\\Local\\Temp\\qtbase.qm', 'PyQt5/Qt5/translations/qtbase.qm')],
+    datas=[('/tmp/qtbase.qm', 'PyQt5/Qt5/translations/qtbase.qm')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +35,10 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+app = BUNDLE(
+    exe,
+    name='YT-TidalDownloader.app',
+    icon=None,
+    bundle_identifier=None,
 )

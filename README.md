@@ -22,7 +22,9 @@
 ### 1. 의존성 설치
 
 ```bash
-pip install -r requirements.txt
+python3 -m venv path/to/venv
+source path/to/venv/bin/activate
+python3 -m pip install -r requirements.txt
 ```
 - 또는 venv 환경에서 설치 권장
 
