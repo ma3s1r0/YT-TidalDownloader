@@ -22,9 +22,9 @@
 ### 1. 의존성 설치
 
 ```bash
-pip install -r requirements.txt
+pip install tidal-dl-ng
 ```
-- 또는 venv 환경에서 설치 권장
+- python 3.12 권장
 
 
 ### 2. 실행
