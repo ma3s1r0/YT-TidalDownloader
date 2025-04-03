@@ -19,20 +19,28 @@
 
 ## 📦 설치 방법
 
-### 1. 의존성 설치
+### 1. python3.12 설치
 
 ```bash
-pip install -r requirements.txt
+brew install python@3.12
+ln -sf /usr/local/bin/python3.12 /usr/local/bin/python3
+ln -sf /usr/local/bin/pip.12 /usr/local/bin/pip3
+
+# 터미널 재시작
+pip3 install tidal-dl-ng # 오류발생시 오류 가이드에 따라 명령어 조정 (pip3 install 권한 문제)
 ```
-- python 3.12 권장
+- python 3.12 권장 (3.11 required, >= 3.13 가능하나 설치시 명령어 추가 필요)
 
 
 ### 2. 실행
-```bash
-python tidal_downloader_gui.py
-```
+- Mac 의 경우 Command + 우클릭 -> 열기로 실행
 
-- macOS/Windows용 단독 실행파일은 /dist 폴더에서 확인 가능합니다.
+### 3. 설정
+- developer.tidal.com 접속
+- dashboard 접속
+- secret key 발급 후 프로그램에 attach
+- 다운로드 받을 유튜브 뮤직 링크 및 다운로드 폴더 설정 후 시작버튼 클릭
+- 간헐적으로 429 에러/음원이 깨지는 경우가 발생했으나 삭제 후 재시도하면 정상 다운로드 됩니다.
 
 ### GUI 입력 항목
 |항목|	설명|
