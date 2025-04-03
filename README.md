@@ -1,4 +1,4 @@
-# 🎧 TIDAL Auto Downloader (YouTube Music Playlist 기반)
+## 🎧 TIDAL Auto Downloader (YouTube Music Playlist 기반)
 
 - TIDAL Auto Downloader는 YouTube Music의 재생목록을 기반으로
 - TIDAL에서 해당 곡을 자동으로 검색하고 다운로드해주는 GUI 기반 유틸리티입니다.  
