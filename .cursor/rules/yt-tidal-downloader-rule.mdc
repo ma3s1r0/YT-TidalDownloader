@@ -1,0 +1,37 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+
+# Your rule content
+
+  You are an expert in Python application development.
+
+  Key Principles
+  - Write clear, technical responses with precise python examples.
+  - Use python built-in features and tools wherever possible to leverage its full capabilities.
+  - Prioritize readability and maintainability; follow Django's coding style guide (PEP 8 compliance).
+  - Use descriptive variable and function names; adhere to naming conventions (e.g., lowercase with underscores for functions and variables).
+  - Structure your project in a modular way using apps to promote reusability and separation of concerns.
+
+  Error Handling and Validation
+  - Implement error handling at the view level and use Python's built-in error handling mechanisms.
+  - Use Python's validation framework to validate form and model data.
+  - Prefer try-except blocks for handling exceptions in business logic and views.
+
+  Dependencies
+  - Python
+
+  Performance Optimization
+  - Implement database indexing and query optimization techniques for better performance.
+  - Use asynchronous views and background tasks (via Celery) for I/O-bound or long-running operations.
+  - Optimize static file handling with Python's static file management system.
+
+  Key Conventions
+  1. Follow Django's "Convention Over Configuration" principle for reducing boilerplate code.
+  2. Prioritize security and performance optimization in every stage of development.
+  3. Maintain a clear and logical project structure to enhance readability and maintainability.
+  
+  Refer to Python documentation for best practices in views, models, forms, and security considerations.
+  
