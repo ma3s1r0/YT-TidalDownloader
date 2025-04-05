@@ -7,6 +7,8 @@ import subprocess
 import requests
 import Levenshtein
 from ytmusicapi import YTMusic
+from mutagen import File as MutagenFile
+from pathlib import Path
 
 # gettext 관련 에러 방지
 try:
@@ -381,6 +383,120 @@ def try_download(tracks, tidal_dl, headers, track_dir, logger):
         time.sleep(1)
     return failed
 
+def verify_audio_file(file_path, logger):
+    """
+    음악 파일의 무결성을 검사합니다.
+    
+    Args:
+        file_path (str): 검사할 파일 경로
+        logger (callable): 로깅 함수
+        
+    Returns:
+        bool: 파일이 유효하면 True, 그렇지 않으면 False
+    """
+    try:
+        audio = MutagenFile(file_path)
+        if audio is None:
+            logger(f"⚠️ 손상된 파일 감지: {os.path.basename(file_path)}")
+            return False
+            
+        # 파일 크기가 0인 경우
+        if os.path.getsize(file_path) == 0:
+            logger(f"⚠️ 빈 파일 감지: {os.path.basename(file_path)}")
+            return False
+            
+        # 재생 시간이 없거나 너무 짧은 경우 (1초 미만)
+        if hasattr(audio.info, 'length') and audio.info.length < 1:
+            logger(f"⚠️ 비정상적으로 짧은 파일 감지: {os.path.basename(file_path)}")
+            return False
+            
+        return True
+    except Exception as e:
+        logger(f"⚠️ 파일 검증 중 오류 발생: {os.path.basename(file_path)} - {str(e)}")
+        return False
+
+def verify_downloaded_files(track_dir, logger):
+    """
+    다운로드된 모든 음악 파일의 무결성을 검사합니다.
+    
+    Args:
+        track_dir (str): 트랙 디렉토리 경로
+        logger (callable): 로깅 함수
+        
+    Returns:
+        list: 손상된 파일들의 경로 목록
+    """
+    tracks_path = os.path.join(track_dir, "Tracks")
+    corrupted_files = []
+    
+    if not os.path.exists(tracks_path):
+        logger("❌ Tracks 디렉토리를 찾을 수 없습니다.")
+        return corrupted_files
+        
+    logger("\n[+] 다운로드된 파일 검증 시작...")
+    total_files = len([f for f in os.listdir(tracks_path) 
+                      if f.lower().endswith(('.mp3', '.flac', '.wav', '.m4a'))])
+    
+    for idx, filename in enumerate(os.listdir(tracks_path), 1):
+        if filename.lower().endswith(('.mp3', '.flac', '.wav', '.m4a')):
+            file_path = os.path.join(tracks_path, filename)
+            logger(f"[{idx}/{total_files}] 검증 중: {filename}")
+            
+            if not verify_audio_file(file_path, logger):
+                corrupted_files.append(file_path)
+                
+    return corrupted_files
+
+def retry_corrupted_downloads(corrupted_files, tidal_dl, headers, track_dir, logger):
+    """
+    손상된 파일들을 삭제하고 재다운로드를 시도합니다.
+    
+    Args:
+        corrupted_files (list): 손상된 파일들의 경로 목록
+        tidal_dl (str): tidal-dl 실행 파일 경로
+        headers (dict): API 요청 헤더
+        track_dir (str): 트랙 디렉토리 경로
+        logger (callable): 로깅 함수
+    """
+    if not corrupted_files:
+        logger("✅ 모든 파일이 정상입니다!")
+        return
+        
+    logger(f"\n[+] {len(corrupted_files)}개의 손상된 파일 재다운로드 시작")
+    
+    for file_path in corrupted_files:
+        filename = os.path.basename(file_path)
+        name = os.path.splitext(filename)[0]
+        
+        # 파일명에서 아티스트와 제목 추출
+        if ' - ' in name:
+            artist, title = name.split(' - ', 1)
+        else:
+            # 구분자가 없는 경우 전체를 제목으로 취급
+            artist, title = "", name
+            
+        logger(f"\n[+] 재다운로드 시도: {filename}")
+        
+        # 기존 파일 삭제
+        try:
+            os.remove(file_path)
+            logger(f"[+] 손상된 파일 삭제: {filename}")
+        except Exception as e:
+            logger(f"⚠️ 파일 삭제 실패: {filename} - {e}")
+            continue
+            
+        # Tidal에서 검색 및 다운로드
+        track_url = search_tidal_track(title, artist, headers, logger)
+        if track_url:
+            if download_with_tidal_dl(tidal_dl, track_url, logger):
+                logger(f"✅ 재다운로드 성공: {filename}")
+            else:
+                logger(f"❌ 재다운로드 실패: {filename}")
+        else:
+            logger(f"❌ Tidal에서 트랙을 찾을 수 없습니다: {filename}")
+        
+        time.sleep(1)  # API 요청 간격 조절
+
 def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, logger):
     logger("[+] 액세스 토큰 요청 중...")
     access_token = get_tidal_access_token(client_id, client_secret, logger)
@@ -450,3 +566,13 @@ def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, 
             logger("✅ 모든 실패 곡이 재시도에서 성공했습니다.")
     else:
         logger("✅ 모든 곡 다운로드 완료!")
+        
+    # 다운로드 완료 후 파일 무결성 검사
+    logger("\n[+] 다운로드된 파일 무결성 검사 시작...")
+    corrupted_files = verify_downloaded_files(track_dir, logger)
+    
+    if corrupted_files:
+        logger(f"\n⚠️ {len(corrupted_files)}개의 손상된 파일이 발견되었습니다.")
+        retry_corrupted_downloads(corrupted_files, tidal_dl, headers, track_dir, logger)
+    else:
+        logger("\n✅ 모든 파일이 정상적으로 다운로드되었습니다!")

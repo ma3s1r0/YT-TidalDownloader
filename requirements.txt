@@ -3,3 +3,4 @@ requests>=2.31.0
 python-dotenv>=1.0.1
 ytmusicapi>=1.4.0
 python-Levenshtein>=0.23.0
+mutagen>=1.47.0
