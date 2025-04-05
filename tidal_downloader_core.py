@@ -497,7 +497,69 @@ def retry_corrupted_downloads(corrupted_files, tidal_dl, headers, track_dir, log
         
         time.sleep(1)  # API 요청 간격 조절
 
-def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, logger):
+def get_tracks_from_tidal_playlist(playlist_url, headers, logger):
+    """
+    Tidal 플레이리스트에서 트랙 목록을 가져옵니다.
+    
+    Args:
+        playlist_url (str): Tidal 플레이리스트 URL
+        headers (dict): API 요청 헤더
+        logger (callable): 로깅 함수
+        
+    Returns:
+        list: 트랙 정보 목록
+    """
+    # 플레이리스트 ID 추출
+    match = re.search(r'playlist/([a-zA-Z0-9-]+)', playlist_url)
+    if not match:
+        logger("❌ 유효하지 않은 Tidal 플레이리스트 링크입니다.")
+        return []
+
+    playlist_id = match.group(1)
+    logger(f"[+] Tidal 플레이리스트 '{playlist_id}' 로드 중...")
+    
+    try:
+        # 플레이리스트 트랙 가져오기
+        url = f"https://openapi.tidal.com/v2/playlists/{playlist_id}?countryCode=US&include=items"
+        headers['accept'] = 'application/vnd.api+json'  # API 요구사항에 맞게 accept 헤더 추가
+        logger(f"[+] API 요청 URL: {url}")
+        
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code != 200:
+            logger(f"❌ 플레이리스트 로드 실패: {response.status_code} - {response.text}")
+            return []
+            
+        data = response.json()
+        included = data.get("included", [])
+        logger(f"[+] 플레이리스트 트랙 목록: {data}")
+        if not included:
+            logger("❌ 플레이리스트에 트랙이 없습니다.")
+            return []
+            
+        # included에서 type이 'tracks'인 항목만 필터링
+        tracks_data = [item for item in included if item.get("type") == "tracks"]
+        track_count = len(tracks_data)
+        logger(f"[+] 총 {track_count}개 트랙 발견")
+        
+        tracks = []
+        for idx, item in enumerate(tracks_data, 1):
+            if idx % 20 == 0:
+                logger(f"[+] 트랙 {idx}/{track_count} 처리 중...")
+            
+            track_id = item.get("id")
+            if track_id:
+                tracks.append({
+                    "id": track_id,
+                    "url": f"https://tidal.com/browse/track/{track_id}"
+                })
+                
+        return tracks
+    except Exception as e:
+        logger(f"❌ Tidal API 오류: {e}")
+        return []
+
+def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, logger, is_tidal_playlist=False):
     logger("[+] 액세스 토큰 요청 중...")
     access_token = get_tidal_access_token(client_id, client_secret, logger)
     if not access_token:
@@ -506,67 +568,91 @@ def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, 
     headers = {"Authorization": f"Bearer {access_token}"}
     update_tidal_dl_config(tidal_dl, track_dir, logger)
 
-    logger("[+] 로컬 트랙 목록 불러오는 중...")
-    local_tracks = get_tracks_from_directory(track_dir)
-    logger("[+] 유튜브 뮤직에서 트랙 가져오는 중...")
-    yt_tracks = get_tracks_from_ytmusic(playlist_url, logger)
+    if is_tidal_playlist:
+        # Tidal 플레이리스트 처리
+        logger("[+] Tidal 플레이리스트에서 트랙 가져오는 중...")
+        tracks = get_tracks_from_tidal_playlist(playlist_url, headers, logger)
+        
+        if not tracks:
+            return
+            
+        logger(f"\n[+] 총 {len(tracks)}곡 다운로드 시도 중...")
+        failed = []
+        
+        for idx, track in enumerate(tracks, 1):
+            logger(f"[{idx:02d}] 🎵 트랙 ID: {track['id']}")
+            if not download_with_tidal_dl(tidal_dl, track['url'], logger):
+                failed.append(track)
+            time.sleep(1)  # API 요청 간격 조절
+            
+        if failed:
+            logger(f"\n❌ {len(failed)}개 트랙 다운로드 실패")
+            with open("failed_tidal_tracks.json", "w", encoding="utf-8") as f:
+                json.dump(failed, f, ensure_ascii=False, indent=2)
+            logger("실패한 트랙 목록이 failed_tidal_tracks.json에 저장되었습니다.")
+    else:
+        # YouTube Music 플레이리스트 처리 (기존 로직)
+        logger("[+] 로컬 트랙 목록 불러오는 중...")
+        local_tracks = get_tracks_from_directory(track_dir)
+        logger("[+] 유튜브 뮤직에서 트랙 가져오는 중...")
+        yt_tracks = get_tracks_from_ytmusic(playlist_url, logger)
 
-    missing = []
-    for t in yt_tracks:
-        matched = False
-        logger(f"[CHECK] {t['title']} - {t['artist']}")
-        for p in t['patterns']:
-            for l in local_tracks:
-                sim = similar(p, l)
-                if DEBUG: logger(f"[DEBUG] comparing '{p}' vs '{l}' → {sim:.2f}")
-                if sim > 0.5:
-                    if DEBUG: logger(f"[SIMILAR] {p} ≈ {l} → {sim:.2f}")
-                    matched = True
-                    break
-            if matched:
-                break
-        if not matched:
-            logger(f"[MISS] ❌ {t['title']} - {t['artist']}")
-            missing.append(t)
-        else:
-            logger(f"[SKIP] ✅ {t['title']} - {t['artist']}")
-
-    logger(f"\n[+] 총 {len(missing)}곡 다운로드 시도 중...")
-    failed = try_download(missing, tidal_dl, headers, track_dir, logger)
-
-    if failed:
-        logger("\n[+] 다운로드 실패 곡 diff 기반 재시도 중...")
-        local_tracks_retry = get_tracks_from_directory(track_dir)
-        recheck = []
-        for t in failed:
+        missing = []
+        for t in yt_tracks:
             matched = False
-            for pattern in t['patterns']:
-                for l in local_tracks_retry:
-                    sim = similar(pattern, l)
-                    if DEBUG:
-                        logger(f"[DEBUG] retry comparing '{pattern}' vs '{l}' → {sim:.2f}")
-                    if sim > 0.2:
+            logger(f"[CHECK] {t['title']} - {t['artist']}")
+            for p in t['patterns']:
+                for l in local_tracks:
+                    sim = similar(p, l)
+                    if DEBUG: logger(f"[DEBUG] comparing '{p}' vs '{l}' → {sim:.2f}")
+                    if sim > 0.5:
+                        if DEBUG: logger(f"[SIMILAR] {p} ≈ {l} → {sim:.2f}")
                         matched = True
-                        logger(f"[RETRY SKIP] ✅ {t['title']} - {t['artist']} ≈ {l} → {sim:.2f}")
                         break
                 if matched:
                     break
             if not matched:
-                recheck.append(t)
+                logger(f"[MISS] ❌ {t['title']} - {t['artist']}")
+                missing.append(t)
+            else:
+                logger(f"[SKIP] ✅ {t['title']} - {t['artist']}")
 
-        if recheck:
-            logger(f"\n[+] 재시도할 {len(recheck)}곡 다운로드 중...")
-            still_failed = try_download(recheck, tidal_dl, headers, track_dir, logger)
+        logger(f"\n[+] 총 {len(missing)}곡 다운로드 시도 중...")
+        failed = try_download(missing, tidal_dl, headers, track_dir, logger)
 
-            if still_failed:
-                with open("missing_tracks.json", "w", encoding="utf-8") as f:
-                    json.dump(still_failed, f, ensure_ascii=False, indent=2)
-                logger(f"❌ 최종 실패 트랙 {len(still_failed)}개 → missing_tracks.json 저장 완료")
+        if failed:
+            logger("\n[+] 다운로드 실패 곡 diff 기반 재시도 중...")
+            local_tracks_retry = get_tracks_from_directory(track_dir)
+            recheck = []
+            for t in failed:
+                matched = False
+                for pattern in t['patterns']:
+                    for l in local_tracks_retry:
+                        sim = similar(pattern, l)
+                        if DEBUG:
+                            logger(f"[DEBUG] retry comparing '{pattern}' vs '{l}' → {sim:.2f}")
+                        if sim > 0.2:
+                            matched = True
+                            logger(f"[RETRY SKIP] ✅ {t['title']} - {t['artist']} ≈ {l} → {sim:.2f}")
+                            break
+                    if matched:
+                        break
+                if not matched:
+                    recheck.append(t)
+
+            if recheck:
+                logger(f"\n[+] 재시도할 {len(recheck)}곡 다운로드 중...")
+                still_failed = try_download(recheck, tidal_dl, headers, track_dir, logger)
+
+                if still_failed:
+                    with open("missing_tracks.json", "w", encoding="utf-8") as f:
+                        json.dump(still_failed, f, ensure_ascii=False, indent=2)
+                    logger(f"❌ 최종 실패 트랙 {len(still_failed)}개 → missing_tracks.json 저장 완료")
+            else:
+                logger("✅ 모든 실패 곡이 재시도에서 성공했습니다.")
         else:
-            logger("✅ 모든 실패 곡이 재시도에서 성공했습니다.")
-    else:
-        logger("✅ 모든 곡 다운로드 완료!")
-        
+            logger("✅ 모든 곡 다운로드 완료!")
+    
     # 다운로드 완료 후 파일 무결성 검사
     logger("\n[+] 다운로드된 파일 무결성 검사 시작...")
     corrupted_files = verify_downloaded_files(track_dir, logger)
