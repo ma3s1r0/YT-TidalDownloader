@@ -4,7 +4,8 @@ from pathlib import Path
 from dotenv import load_dotenv, set_key
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
-    QTextEdit, QLineEdit, QLabel, QFileDialog, QRadioButton, QButtonGroup
+    QTextEdit, QLineEdit, QLabel, QFileDialog, QRadioButton, QButtonGroup,
+    QMessageBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTranslator, QLibraryInfo
 import builtins
@@ -104,8 +105,11 @@ class DownloaderApp(QWidget):
         # 버튼
         button_layout = QHBoxLayout()
         self.start_btn = QPushButton("Start Download")
+        self.stop_btn = QPushButton("Stop Download")
+        self.stop_btn.setEnabled(False)  # 초기에는 비활성화
         self.clear_btn = QPushButton("Clear Log")
         button_layout.addWidget(self.start_btn)
+        button_layout.addWidget(self.stop_btn)
         button_layout.addWidget(self.clear_btn)
         layout.addLayout(button_layout)
 
@@ -118,7 +122,11 @@ class DownloaderApp(QWidget):
 
         # 이벤트 연결
         self.start_btn.clicked.connect(self.on_start)
+        self.stop_btn.clicked.connect(self.on_stop)
         self.clear_btn.clicked.connect(lambda: self.log_area.clear())
+        
+        # 다운로드 중단 플래그
+        self.stop_requested = False
 
     def create_input(self, layout, label, default=""):
         h = QHBoxLayout()
@@ -137,6 +145,7 @@ class DownloaderApp(QWidget):
         self.log_signal.emit(msg)
 
     def lock_ui(self, lock: bool):
+        """UI 요소 잠금/해제"""
         for widget in [
             self.track_dir_input,
             self.tidal_dl_input,
@@ -145,11 +154,20 @@ class DownloaderApp(QWidget):
             self.client_id_input,
             self.client_secret_input,
             self.start_btn,
+            self.youtube_radio,
+            self.tidal_radio
         ]:
-            widget.setDisabled(lock)
+            widget.setEnabled(not lock)
+            
+        # 중지 버튼은 반대로 동작
+        self.stop_btn.setEnabled(lock)
         
         # UI 잠금 시 자동 저장 비활성화, 해제 시 다시 활성화
         self.auto_save_enabled = not lock
+        
+        # 잠금 해제 시 라디오 버튼 상태에 따라 URL 입력 필드 활성화
+        if not lock:
+            self.update_playlist_inputs()
 
     def save_setting(self, key, value):
         """설정 값을 저장하는 함수"""
@@ -164,6 +182,13 @@ class DownloaderApp(QWidget):
 
     def update_playlist_inputs(self):
         """라디오 버튼 상태에 따라 입력 필드 활성화/비활성화"""
+        # UI가 잠겨있는 경우 모두 비활성화
+        if not self.start_btn.isEnabled():
+            self.playlist_url_input.setEnabled(False)
+            self.tidal_playlist_input.setEnabled(False)
+            return
+            
+        # UI가 잠겨있지 않은 경우 라디오 버튼 상태에 따라 활성화
         is_youtube = self.youtube_radio.isChecked()
         self.playlist_url_input.setEnabled(is_youtube)
         self.tidal_playlist_input.setEnabled(not is_youtube)
@@ -214,9 +239,27 @@ class DownloaderApp(QWidget):
         import threading
         threading.Thread(target=self.run_process, daemon=True).start()
 
+    def on_stop(self):
+        """다운로드 중단 처리"""
+        reply = QMessageBox.question(
+            self, 
+            '다운로드 중단', 
+            '다운로드를 중단하시겠습니까?\n현재 다운로드 중인 파일은 삭제됩니다.',
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+        
+        if reply == QMessageBox.Yes:
+            self.stop_requested = True
+            self.log("⚠️ 다운로드 중단 요청됨... 현재 작업이 완료되면 중단됩니다.")
+            self.stop_btn.setEnabled(False)
+
     def run_process(self):
         try:
             from tidal_downloader_core import run_downloader
+            
+            # 중단 플래그 초기화
+            self.stop_requested = False
             
             # 플레이리스트 URL 선택
             playlist_url = self.playlist_url_input.text() if self.youtube_radio.isChecked() else self.tidal_playlist_input.text()
@@ -229,7 +272,8 @@ class DownloaderApp(QWidget):
                 client_id=self.client_id_input.text(),
                 client_secret=self.client_secret_input.text(),
                 logger=self.log,
-                is_tidal_playlist=is_tidal_playlist
+                is_tidal_playlist=is_tidal_playlist,
+                stop_flag=lambda: self.stop_requested  # 중단 플래그 전달
             )
         except Exception as e:
             self.log(f"❌ 처리 중 오류 발생: {e}")
@@ -238,6 +282,7 @@ class DownloaderApp(QWidget):
         finally:
             self.is_processing = False
             self.lock_ui(False)
+            self.stop_requested = False
 
 
 if __name__ == '__main__':

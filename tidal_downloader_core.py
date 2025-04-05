@@ -311,8 +311,13 @@ def update_tidal_dl_config(tidal_dl, track_dir, logger):
     except Exception as e:
         logger(f"❌ 설정 업데이트 중 예외 발생: {e}")
 
-def download_with_tidal_dl(tidal_dl, track_url, logger):
+def download_with_tidal_dl(tidal_dl, track_url, logger, stop_flag=None):
     logger(f"⬇️ 다운로드 시도 중: {track_url}")
+    
+    # 중단 요청 확인
+    if stop_flag and stop_flag():
+        logger("⚠️ 사용자 요청으로 다운로드가 중단되었습니다.")
+        return False
     
     # 실행 파일 경로 찾기
     tidal_dl_path = find_executable_path(tidal_dl)
@@ -341,21 +346,57 @@ def download_with_tidal_dl(tidal_dl, track_url, logger):
         
         logger(f"[+] 실행 명령: {tidal_dl_path} dl {track_url}")
         
-        result = subprocess.run([tidal_dl_path, "dl", track_url], 
-                               text=True, 
-                               timeout=60, 
-                               capture_output=True, 
-                               env=env,
-                               **extra_kwargs)
-                               
-        logger(result.stdout)
-        if result.stderr:
-            logger(f"오류: {result.stderr}")
+        process = subprocess.Popen(
+            [tidal_dl_path, "dl", track_url],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            **extra_kwargs
+        )
+        
+        # 실시간으로 출력 모니터링하면서 중단 요청 확인
+        while True:
+            # 중단 요청 확인
+            if stop_flag and stop_flag():
+                process.terminate()
+                process.wait(timeout=5)  # 5초 대기
+                
+                # 다운로드 중이던 파일 삭제
+                try:
+                    tracks_path = os.path.join(os.path.dirname(track_url), "Tracks")
+                    if os.path.exists(tracks_path):
+                        for file in os.listdir(tracks_path):
+                            if os.path.getctime(os.path.join(tracks_path, file)) > time.time() - 60:  # 1분 이내 생성된 파일
+                                try:
+                                    os.remove(os.path.join(tracks_path, file))
+                                    logger(f"[+] 중단된 다운로드 파일 삭제: {file}")
+                                except Exception as e:
+                                    logger(f"⚠️ 파일 삭제 실패: {file} - {e}")
+                except Exception as e:
+                    logger(f"⚠️ 중단된 파일 정리 중 오류: {e}")
+                
+                logger("⚠️ 다운로드가 중단되었습니다.")
+                return False
             
-        if result.returncode != 0:
-            logger(f"⚠️ 프로세스 종료 코드: {result.returncode}")
+            # 프로세스 출력 읽기
+            output = process.stdout.readline()
+            if output == '' and process.poll() is not None:
+                break
+            if output:
+                logger(output.strip())
+        
+        # 에러 출력 확인
+        stderr = process.stderr.read()
+        if stderr:
+            logger(f"오류: {stderr}")
             
-        return result.returncode == 0
+        return_code = process.poll()
+        if return_code != 0:
+            logger(f"⚠️ 프로세스 종료 코드: {return_code}")
+            
+        return return_code == 0
+            
     except subprocess.TimeoutExpired:
         logger("⏱ 타임아웃 발생")
     except FileNotFoundError:
@@ -370,13 +411,18 @@ def download_with_tidal_dl(tidal_dl, track_url, logger):
         logger(traceback.format_exc())
     return False
 
-def try_download(tracks, tidal_dl, headers, track_dir, logger):
+def try_download(tracks, tidal_dl, headers, track_dir, logger, stop_flag=None):
     failed = []
     for idx, t in enumerate(tracks, start=1):
+        # 중단 요청 확인
+        if stop_flag and stop_flag():
+            logger("⚠️ 사용자 요청으로 다운로드가 중단되었습니다.")
+            return failed
+            
         logger(f"[{idx:02d}] 🎵 {t['title']} - {t['artist']}")
         track_url = search_tidal_track(t['title'], t['artist'], headers, logger)
         if track_url:
-            if not download_with_tidal_dl(tidal_dl, track_url, logger):
+            if not download_with_tidal_dl(tidal_dl, track_url, logger, stop_flag):
                 failed.append(t)
         else:
             failed.append(t)
@@ -522,7 +568,6 @@ def get_tracks_from_tidal_playlist(playlist_url, headers, logger):
         # 플레이리스트 트랙 가져오기
         url = f"https://openapi.tidal.com/v2/playlists/{playlist_id}?countryCode=US&include=items"
         headers['accept'] = 'application/vnd.api+json'  # API 요구사항에 맞게 accept 헤더 추가
-        logger(f"[+] API 요청 URL: {url}")
         
         response = requests.get(url, headers=headers)
         
@@ -532,7 +577,6 @@ def get_tracks_from_tidal_playlist(playlist_url, headers, logger):
             
         data = response.json()
         included = data.get("included", [])
-        logger(f"[+] 플레이리스트 트랙 목록: {data}")
         if not included:
             logger("❌ 플레이리스트에 트랙이 없습니다.")
             return []
@@ -559,7 +603,7 @@ def get_tracks_from_tidal_playlist(playlist_url, headers, logger):
         logger(f"❌ Tidal API 오류: {e}")
         return []
 
-def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, logger, is_tidal_playlist=False):
+def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, logger, is_tidal_playlist=False, stop_flag=None):
     logger("[+] 액세스 토큰 요청 중...")
     access_token = get_tidal_access_token(client_id, client_secret, logger)
     if not access_token:
@@ -580,8 +624,13 @@ def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, 
         failed = []
         
         for idx, track in enumerate(tracks, 1):
+            # 중단 요청 확인
+            if stop_flag and stop_flag():
+                logger("⚠️ 사용자 요청으로 다운로드가 중단되었습니다.")
+                return
+                
             logger(f"[{idx:02d}] 🎵 트랙 ID: {track['id']}")
-            if not download_with_tidal_dl(tidal_dl, track['url'], logger):
+            if not download_with_tidal_dl(tidal_dl, track['url'], logger, stop_flag):
                 failed.append(track)
             time.sleep(1)  # API 요청 간격 조절
             
@@ -591,7 +640,7 @@ def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, 
                 json.dump(failed, f, ensure_ascii=False, indent=2)
             logger("실패한 트랙 목록이 failed_tidal_tracks.json에 저장되었습니다.")
     else:
-        # YouTube Music 플레이리스트 처리 (기존 로직)
+        # YouTube Music 플레이리스트 처리
         logger("[+] 로컬 트랙 목록 불러오는 중...")
         local_tracks = get_tracks_from_directory(track_dir)
         logger("[+] 유튜브 뮤직에서 트랙 가져오는 중...")
@@ -599,6 +648,11 @@ def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, 
 
         missing = []
         for t in yt_tracks:
+            # 중단 요청 확인
+            if stop_flag and stop_flag():
+                logger("⚠️ 사용자 요청으로 다운로드가 중단되었습니다.")
+                return
+                
             matched = False
             logger(f"[CHECK] {t['title']} - {t['artist']}")
             for p in t['patterns']:
@@ -618,13 +672,18 @@ def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, 
                 logger(f"[SKIP] ✅ {t['title']} - {t['artist']}")
 
         logger(f"\n[+] 총 {len(missing)}곡 다운로드 시도 중...")
-        failed = try_download(missing, tidal_dl, headers, track_dir, logger)
+        failed = try_download(missing, tidal_dl, headers, track_dir, logger, stop_flag)
 
-        if failed:
+        if failed and not (stop_flag and stop_flag()):  # 중단되지 않은 경우에만 재시도
             logger("\n[+] 다운로드 실패 곡 diff 기반 재시도 중...")
             local_tracks_retry = get_tracks_from_directory(track_dir)
             recheck = []
             for t in failed:
+                # 중단 요청 확인
+                if stop_flag and stop_flag():
+                    logger("⚠️ 사용자 요청으로 다운로드가 중단되었습니다.")
+                    return
+                    
                 matched = False
                 for pattern in t['patterns']:
                     for l in local_tracks_retry:
@@ -642,7 +701,7 @@ def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, 
 
             if recheck:
                 logger(f"\n[+] 재시도할 {len(recheck)}곡 다운로드 중...")
-                still_failed = try_download(recheck, tidal_dl, headers, track_dir, logger)
+                still_failed = try_download(recheck, tidal_dl, headers, track_dir, logger, stop_flag)
 
                 if still_failed:
                     with open("missing_tracks.json", "w", encoding="utf-8") as f:
@@ -653,12 +712,14 @@ def run_downloader(track_dir, tidal_dl, playlist_url, client_id, client_secret, 
         else:
             logger("✅ 모든 곡 다운로드 완료!")
     
-    # 다운로드 완료 후 파일 무결성 검사
-    logger("\n[+] 다운로드된 파일 무결성 검사 시작...")
-    corrupted_files = verify_downloaded_files(track_dir, logger)
-    
-    if corrupted_files:
-        logger(f"\n⚠️ {len(corrupted_files)}개의 손상된 파일이 발견되었습니다.")
-        retry_corrupted_downloads(corrupted_files, tidal_dl, headers, track_dir, logger)
-    else:
-        logger("\n✅ 모든 파일이 정상적으로 다운로드되었습니다!")
+    # 중단되지 않은 경우에만 파일 무결성 검사 실행
+    if not (stop_flag and stop_flag()):
+        # 다운로드 완료 후 파일 무결성 검사
+        logger("\n[+] 다운로드된 파일 무결성 검사 시작...")
+        corrupted_files = verify_downloaded_files(track_dir, logger)
+        
+        if corrupted_files:
+            logger(f"\n⚠️ {len(corrupted_files)}개의 손상된 파일이 발견되었습니다.")
+            retry_corrupted_downloads(corrupted_files, tidal_dl, headers, track_dir, logger)
+        else:
+            logger("\n✅ 모든 파일이 정상적으로 다운로드되었습니다!")

@@ -4,3 +4,4 @@
 /dist/*
 /.venv/*
 .DS_Store
+failed_tidal_tracks.json
